@@ -2,8 +2,8 @@
   <div class="container py-5">
     <!-- Back button -->
     <div class="mb-4">
-      <button 
-        class="btn btn-outline-secondary" 
+      <button
+        class="btn btn-outline-secondary"
         @click="goBack"
       >
         <i class="fas fa-arrow-left me-2"></i>Back to Contests
@@ -95,19 +95,22 @@
         <div class="card-header">
           <div class="d-flex justify-content-between align-items-center">
             <h5 class="mb-0"><i class="fas fa-file-alt me-2"></i>Submissions</h5>
-            <button 
-              v-if="loadingSubmissions"
-              class="btn btn-sm btn-outline-secondary" 
+            <button
+              v-if="loadingSubmissions || refreshingMetadata"
+              class="btn btn-sm btn-outline-secondary"
               disabled
             >
-              <span class="spinner-border spinner-border-sm me-2"></span>Loading...
+              <span class="spinner-border spinner-border-sm me-2"></span>{{ loadingSubmissions ? 'Loading...' : 'Refreshing...' }}
             </button>
-            <button 
+            <button
               v-else
-              class="btn btn-sm btn-outline-primary" 
-              @click="loadSubmissions"
+              class="btn btn-sm btn-outline-light"
+              @click="refreshMetadata"
+              :disabled="submissions.length === 0"
+              title="Refresh article metadata (word count, author, etc.) from MediaWiki and reload submissions"
+              style="color: white; border-color: white;"
             >
-              <i class="fas fa-sync-alt me-1"></i>Refresh
+              <i class="fas fa-database me-1"></i>Refresh Metadata
             </button>
           </div>
         </div>
@@ -115,12 +118,13 @@
           <div v-if="submissions.length === 0 && !loadingSubmissions" class="alert alert-info">
             <i class="fas fa-info-circle me-2"></i>No submissions yet for this contest.
           </div>
-          
+
           <div v-else-if="submissions.length > 0" class="table-responsive">
             <table class="table table-sm table-hover">
               <thead>
                 <tr>
                   <th>Article Title</th>
+                  <th>Article Author</th>
                   <th>Submitted By</th>
                   <th>Status</th>
                   <th>Score</th>
@@ -131,14 +135,33 @@
               <tbody>
                   <tr v-for="submission in submissions" :key="submission.id">
                   <td>
-                    <a 
-                      href="#" 
+                    <a
+                      href="#"
                       @click.prevent="showArticlePreview(submission.article_link, submission.article_title)"
                       class="text-decoration-none article-title-link"
+                      :title="submission.article_link"
                     >
                       {{ submission.article_title }}
                       <i class="fas fa-eye ms-1" style="font-size: 0.8em;"></i>
                     </a>
+                    <div
+                      v-if="submission.article_word_count && submission.article_word_count > 0"
+                      class="text-muted small mt-1"
+                    >
+                      <i class="fas fa-file-alt me-1"></i>{{ formatWordCount(submission.article_word_count) }}
+                    </div>
+                    <div v-else-if="submission.article_word_count === 0" class="text-muted small mt-1">
+                      <i class="fas fa-file-alt me-1"></i>Size: 0 bytes
+                    </div>
+                  </td>
+                  <td>
+                    <div v-if="submission.article_author">
+                      <i class="fas fa-user me-1"></i>{{ submission.article_author }}
+                    </div>
+                    <div v-else class="text-muted small">Unknown</div>
+                    <div v-if="submission.article_created_at" class="text-muted small mt-1">
+                      <i class="fas fa-calendar me-1"></i>{{ formatDateShort(submission.article_created_at) }}
+                    </div>
                   </td>
                   <td>{{ submission.username || 'Unknown' }}</td>
                   <td>
@@ -149,7 +172,7 @@
                   <td>{{ submission.score || 0 }}</td>
                   <td>{{ formatDate(submission.submitted_at) }}</td>
                   <td>
-                    <button 
+                    <button
                       @click="showArticlePreview(submission.article_link, submission.article_title)"
                       class="btn btn-sm btn-outline-primary"
                       title="Preview Article"
@@ -169,15 +192,15 @@
         <!-- Debug info and auth status -->
         <div v-if="contest && !currentUser && !checkingAuth" class="alert alert-warning py-1 px-2 mb-0 me-auto">
           <i class="fas fa-exclamation-triangle me-1"></i>
-          <strong>User not loaded!</strong> 
+          <strong>User not loaded!</strong>
           <button class="btn btn-sm btn-outline-warning ms-2" @click="forceAuthRefresh">
             <i class="fas fa-sync-alt me-1"></i>Refresh Auth
           </button>
         </div>
-        
-        <button 
+
+        <button
           v-if="canDeleteContest"
-          class="btn btn-danger" 
+          class="btn btn-danger"
           @click="handleDeleteContest"
           :disabled="deletingContest"
         >
@@ -185,9 +208,9 @@
           <i v-else class="fas fa-trash me-2"></i>
           {{ deletingContest ? 'Deleting...' : 'Delete Contest' }}
         </button>
-        <button 
+        <button
           v-if="contest?.status === 'current' && isAuthenticated && !canViewSubmissions"
-          class="btn btn-primary" 
+          class="btn btn-primary"
           @click="handleSubmitArticle"
         >
           <i class="fas fa-paper-plane me-2"></i>Submit Article
@@ -216,7 +239,6 @@ import { useRouter, useRoute } from 'vue-router'
 import { useStore } from '../store'
 import api from '../services/api'
 import { showAlert } from '../utils/alerts'
-import { unslugify } from '../utils/slugify'
 import SubmitArticleModal from '../components/SubmitArticleModal.vue'
 import ArticlePreviewModal from '../components/ArticlePreviewModal.vue'
 
@@ -230,13 +252,14 @@ export default {
     const router = useRouter()
     const route = useRoute()
     const store = useStore()
-    
+
     // State
     const contest = ref(null)
     const loading = ref(true)
     const error = ref(null)
     const submissions = ref([])
     const loadingSubmissions = ref(false)
+    const refreshingMetadata = ref(false)
     const deletingContest = ref(false)
     const canDeleteContest = ref(false)
     const checkingAuth = ref(false)
@@ -254,7 +277,7 @@ export default {
       }
       return null
     })
-    
+
     const isAuthenticated = computed(() => {
       const user = currentUser.value
       return !!user && !!user.id && !!user.username
@@ -265,75 +288,129 @@ export default {
       if (!isAuthenticated.value || !contest.value || !currentUser.value) {
         return false
       }
-      
+
       const username = (currentUser.value.username || '').trim().toLowerCase()
       const contestData = contest.value
-      
+
       // Check if user is contest creator (case-insensitive)
       const contestCreator = (contestData.created_by || '').trim().toLowerCase()
       if (contestCreator && username === contestCreator) {
         return true
       }
-      
+
       // Check if user is jury member (case-insensitive)
       if (contestData.jury_members && Array.isArray(contestData.jury_members)) {
         const juryUsernames = contestData.jury_members.map(j => (j || '').trim().toLowerCase())
         return juryUsernames.includes(username)
       }
-      
+
       return false
     })
 
     // Check if user can delete contest
     const checkDeletePermission = () => {
       canDeleteContest.value = false
-      
+
       const userFromComputed = currentUser.value
       const userFromStore = store.currentUser
       const userFromState = (store.state && store.state.currentUser) || null
       const userToCheck = userFromComputed || userFromStore || userFromState
-      
+
       if (!isAuthenticated.value || !contest.value || !userToCheck) {
         canDeleteContest.value = false
         return
       }
-      
+
       const username = (userToCheck.username || '').trim()
       const contestCreator = (contest.value.created_by || '').trim()
-      
+
       if (!username || !contestCreator) {
         canDeleteContest.value = false
         return
       }
-      
+
       const usernameLower = username.toLowerCase()
       const creatorLower = contestCreator.toLowerCase()
       canDeleteContest.value = usernameLower === creatorLower
     }
 
-    // Format date for display
+    // Format date for display in Indian Standard Time (IST)
+    // Converts UTC dates from backend to IST timezone for display
     const formatDate = (dateString) => {
       if (!dateString) return 'No date'
       try {
-        return new Date(dateString).toLocaleDateString('en-US', {
+        // Ensure the date string is treated as UTC
+        // If it doesn't end with 'Z', append it to indicate UTC timezone
+        // This fixes the issue where naive UTC datetimes were being interpreted as local time
+        let utcDateString = dateString
+        if (!dateString.endsWith('Z') && !dateString.includes('+') && !dateString.includes('-', 10)) {
+          // If no timezone indicator, assume it's UTC and append 'Z'
+          utcDateString = dateString + 'Z'
+        }
+        
+        // Convert to IST (Indian Standard Time) timezone
+        // IST is UTC+5:30, timezone identifier is 'Asia/Kolkata'
+        return new Date(utcDateString).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
           year: 'numeric',
           month: 'long',
           day: 'numeric',
           hour: '2-digit',
-          minute: '2-digit'
+          minute: '2-digit',
+          hour12: true
         })
       } catch (e) {
         return dateString
       }
     }
 
+    // Format date with full date and time in IST (for article creation date)
+    // Shows complete date and time information including time in IST timezone
+    const formatDateShort = (dateString) => {
+      if (!dateString) return ''
+      try {
+        // Ensure the date string is treated as UTC
+        // If it doesn't end with 'Z', append it to indicate UTC timezone
+        // This fixes the issue where naive UTC datetimes were being interpreted as local time
+        let utcDateString = dateString
+        if (!dateString.endsWith('Z') && !dateString.includes('+') && !dateString.includes('-', 10)) {
+          // If no timezone indicator, assume it's UTC and append 'Z'
+          utcDateString = dateString + 'Z'
+        }
+        
+        // Convert to IST (Indian Standard Time) timezone
+        // IST is UTC+5:30, timezone identifier is 'Asia/Kolkata'
+        // Show full date and time with month name, day, year, hour, and minute
+        return new Date(utcDateString).toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        })
+      } catch (e) {
+        return dateString
+      }
+    }
+
+    // Format word count for display
+    const formatWordCount = (count) => {
+      if (!count) return ''
+      if (count >= 1000) {
+        return `${(count / 1000).toFixed(1)}k words`
+      }
+      return `${count} words`
+    }
+
     // Get status label
     const getStatusLabel = (status) => {
       const labels = {
-        'current': 'Active',
-        'upcoming': 'Upcoming',
-        'past': 'Past',
-        'unknown': 'Unknown'
+        current: 'Active',
+        upcoming: 'Upcoming',
+        past: 'Past',
+        unknown: 'Unknown'
       }
       return labels[status] || 'Unknown'
     }
@@ -363,15 +440,15 @@ export default {
 
       loading.value = true
       error.value = null
-      
+
       try {
         // Fetch contest by slugified name
         const data = await api.get(`/contest/name/${contestName}`)
         contest.value = data
-        
+
         // Check auth and permissions after loading contest
         await checkAuthAndPermissions()
-        
+
         // Load submissions if user can view them
         if (canViewSubmissions.value) {
           loadSubmissions()
@@ -388,21 +465,21 @@ export default {
     const checkAuthAndPermissions = async () => {
       checkingAuth.value = true
       canDeleteContest.value = false
-      
+
       try {
         // Check if user is already in the store
         let loadedUser = store.currentUser || (store.state && store.state.currentUser) || currentUser.value
-        
+
         // If user is not in store, try to load it via checkAuth
         if (!loadedUser) {
           await store.checkAuth()
           await new Promise(resolve => setTimeout(resolve, 150))
           loadedUser = store.currentUser || (store.state && store.state.currentUser) || currentUser.value
         }
-        
+
         // Wait for reactive state to propagate
         await new Promise(resolve => setTimeout(resolve, 100))
-        
+
         // Check delete permission
         checkDeletePermission()
       } catch (error) {
@@ -418,11 +495,23 @@ export default {
       if (!contest.value || !canViewSubmissions.value) {
         return
       }
-      
+
       loadingSubmissions.value = true
       try {
         const data = await api.get(`/contest/${contest.value.id}/submissions`)
         submissions.value = data || []
+
+        // Debug: Log submission data to verify author and word count are present
+        console.log('Loaded submissions:', submissions.value)
+        submissions.value.forEach((sub, index) => {
+          console.log(`Submission ${index + 1}:`, {
+            id: sub.id,
+            title: sub.article_title,
+            author: sub.article_author,
+            word_count: sub.article_word_count,
+            created_at: sub.article_created_at
+          })
+        })
       } catch (error) {
         console.error('Failed to load submissions:', error)
         showAlert('Failed to load submissions: ' + error.message, 'danger')
@@ -432,22 +521,46 @@ export default {
       }
     }
 
+    // Refresh article metadata for all submissions in the contest
+    const refreshMetadata = async () => {
+      if (!contest.value || !canViewSubmissions.value || submissions.value.length === 0) {
+        return
+      }
+
+      refreshingMetadata.value = true
+      try {
+        const response = await api.post(`/submission/contest/${contest.value.id}/refresh-metadata`)
+        showAlert(
+          `Metadata refreshed: ${response.updated} updated, ${response.failed} failed`,
+          response.failed === 0 ? 'success' : 'warning'
+        )
+        
+        // Reload submissions to show updated data
+        await loadSubmissions()
+      } catch (error) {
+        console.error('Failed to refresh metadata:', error)
+        showAlert('Failed to refresh metadata: ' + error.message, 'danger')
+      } finally {
+        refreshingMetadata.value = false
+      }
+    }
+
     // Handle delete contest
     const handleDeleteContest = async () => {
       if (!contest.value) return
-      
+
       const confirmed = confirm(
         `Are you sure you want to delete the contest "${contest.value.name}"?\n\n` +
         'This action cannot be undone and will delete all associated submissions.'
       )
-      
+
       if (!confirmed) return
-      
+
       deletingContest.value = true
       try {
         await api.delete(`/contest/${contest.value.id}`)
         showAlert('Contest deleted successfully', 'success')
-        
+
         // Navigate back to contests list
         router.push({ name: 'Contests' })
       } catch (error) {
@@ -465,7 +578,7 @@ export default {
         return
       }
       submittingToContestId.value = contest.value.id
-      
+
       // Show submit modal using Bootstrap
       setTimeout(() => {
         const modalElement = document.getElementById('submitArticleModal')
@@ -506,7 +619,7 @@ export default {
     const showArticlePreview = (url, title) => {
       previewArticleUrl.value = url
       previewArticleTitle.value = title || 'Article'
-      
+
       // Show modal using Bootstrap
       setTimeout(() => {
         const modalElement = document.getElementById('articlePreviewModal')
@@ -547,9 +660,13 @@ export default {
       isAuthenticated,
       canViewSubmissions,
       formatDate,
+      formatDateShort,
+      formatWordCount,
       getStatusLabel,
       getStatusColor,
       loadSubmissions,
+      refreshMetadata,
+      refreshingMetadata,
       handleDeleteContest,
       handleSubmitArticle,
       handleArticleSubmitted,
@@ -829,15 +946,15 @@ export default {
   .contest-title {
     font-size: 2rem;
   }
-  
+
   .card-body {
     padding: 1rem;
   }
-  
+
   .table {
     font-size: 0.9rem;
   }
-  
+
   .table thead th,
   .table tbody td {
     padding: 0.5rem;

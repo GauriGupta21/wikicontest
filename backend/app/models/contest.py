@@ -9,6 +9,7 @@ from datetime import datetime, date
 from app.database import db
 from app.models.base_model import BaseModel
 
+
 class Contest(BaseModel):
     """
     Contest model representing contests in the WikiContest platform
@@ -29,7 +30,7 @@ class Contest(BaseModel):
         created_at: Timestamp when contest was created
     """
 
-    __tablename__ = 'contests'
+    __tablename__ = "contests"
 
     # Primary key
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -40,7 +41,9 @@ class Contest(BaseModel):
     project_name = db.Column(db.String(100), nullable=False)
 
     # Contest creator (foreign key to users.username)
-    created_by = db.Column(db.String(50), db.ForeignKey('users.username'), nullable=False)
+    created_by = db.Column(
+        db.String(50), db.ForeignKey("users.username"), nullable=False
+    )
 
     # Contest details
     description = db.Column(db.Text, nullable=True)
@@ -65,7 +68,9 @@ class Contest(BaseModel):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
-    submissions = db.relationship('Submission', backref='contest', lazy='dynamic')
+    submissions = db.relationship(
+        "Submission", back_populates="contest", lazy="dynamic"
+    )
 
     def __init__(self, name, project_name, created_by, **kwargs):
         """
@@ -82,6 +87,13 @@ class Contest(BaseModel):
         self.created_by = created_by
 
         # Set optional attributes
+        self.code_link = kwargs.get("code_link")
+        self.description = kwargs.get("description")
+        self.start_date = kwargs.get("start_date")
+        self.end_date = kwargs.get("end_date")
+        self.marks_setting_accepted = kwargs.get("marks_setting_accepted", 0)
+        self.marks_setting_rejected = kwargs.get("marks_setting_rejected", 0)
+        self.allowed_submission_type = kwargs.get("allowed_submission_type", "both")
         self.code_link = kwargs.get('code_link')
         self.description = kwargs.get('description')
         self.start_date = kwargs.get('start_date')
@@ -96,8 +108,8 @@ class Contest(BaseModel):
         self.max_byte_count = kwargs.get('max_byte_count', None)
 
         # Handle rules and jury_members
-        self.set_rules(kwargs.get('rules', {}))
-        self.set_jury_members(kwargs.get('jury_members', []))
+        self.set_rules(kwargs.get("rules", {}))
+        self.set_jury_members(kwargs.get("jury_members", []))
 
     def set_rules(self, rules_dict):
         """
@@ -133,9 +145,9 @@ class Contest(BaseModel):
             jury_list: List of jury member usernames
         """
         if isinstance(jury_list, list):
-            self.jury_members = ','.join(jury_list)
+            self.jury_members = ",".join(jury_list)
         else:
-            self.jury_members = ''
+            self.jury_members = ""
 
     def get_jury_members(self):
         """
@@ -145,7 +157,11 @@ class Contest(BaseModel):
             list: List of jury member usernames
         """
         if self.jury_members:
-            return [username.strip() for username in self.jury_members.split(',') if username.strip()]
+            return [
+                username.strip()
+                for username in self.jury_members.split(",")
+                if username.strip()
+            ]
         return []
 
     def validate_byte_count(self, byte_count):
@@ -224,12 +240,12 @@ class Contest(BaseModel):
             str: Contest status ('current', 'upcoming', 'past', or 'unknown')
         """
         if self.is_active():
-            return 'current'
+            return "current"
         if self.is_upcoming():
-            return 'upcoming'
+            return "upcoming"
         if self.is_past():
-            return 'past'
-        return 'unknown'
+            return "past"
+        return "unknown"
 
     def get_submission_count(self):
         """
@@ -252,21 +268,24 @@ class Contest(BaseModel):
         from app.models.submission import Submission
 
         # Query to get user scores for this contest
-        leaderboard_query = db.session.query(
-            User.id,
-            User.username,
-            db.func.sum(Submission.score).label('total_score')
-        ).join(Submission).filter(
-            Submission.contest_id == self.id
-        ).group_by(User.id, User.username).order_by(
-            db.func.sum(Submission.score).desc()
-        ).all()
+        leaderboard_query = (
+            db.session.query(
+                User.id,
+                User.username,
+                db.func.sum(Submission.score).label("total_score"),
+            )
+            .join(Submission)
+            .filter(Submission.contest_id == self.id)
+            .group_by(User.id, User.username)
+            .order_by(db.func.sum(Submission.score).desc())
+            .all()
+        )
 
         return [
             {
-                'user_id': row.id,
-                'username': row.username,
-                'total_score': row.total_score or 0
+                "user_id": row.id,
+                "username": row.username,
+                "total_score": row.total_score or 0,
             }
             for row in leaderboard_query
         ]
@@ -296,11 +315,13 @@ class Contest(BaseModel):
             'jury_members': self.get_jury_members(),
             # Format datetime as ISO string with 'Z' suffix to indicate UTC
             # This ensures JavaScript interprets it as UTC, not local time
-            'created_at': (self.created_at.isoformat() + 'Z') if self.created_at else None,
-            'submission_count': self.get_submission_count(),
-            'status': self.get_status()      
+            "created_at": (
+                (self.created_at.isoformat() + "Z") if self.created_at else None
+            ),
+            "submission_count": self.get_submission_count(),
+            "status": self.get_status(),
         }
 
     def __repr__(self):
         """String representation of Contest instance"""
-        return f'<Contest {self.name}>'
+        return f"<Contest {self.name}>"
